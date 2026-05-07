@@ -1,0 +1,2 @@
+test_visible.jpg: ambulance, car, person, license plate, night, park, road, van, walk
+vis_000001.jpg: chair, computer, computer chair, computer desk, keyboard, computer monitor, table, desktop computer, electronic, equipment, mouse, office, office building, office chair, office desk, office supply, room, swivel chair
