@@ -58,6 +58,41 @@ logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 from diffusers.models.attention import BasicTransformerBlock, _chunked_feed_forward
 from einops import rearrange
 
+# ===== [POSITION_ENCODING_START] 方案C：模态嵌入 + 2D空间位置编码 =====
+import math
+import numpy as np
+
+# 全局变量，用于在 new_forward 中访问 UNet 的模态嵌入
+_GLOBAL_MODALITY_EMBED = None
+
+def get_2d_sincos_pos_embed(d_model, h, w):
+    """
+    生成2D正弦余弦位置编码
+    Args:
+        d_model: 嵌入维度（必须是4的倍数）
+        h, w: 空间高度和宽度
+    Returns:
+        pos_embed: (h*w, d_model)
+    """
+    assert d_model % 4 == 0, "d_model must be divisible by 4"
+    half_d = d_model // 2
+    # 行方向编码
+    pe_h = np.zeros((h, half_d))
+    position = np.arange(h)[:, np.newaxis]
+    div_term = np.exp(np.arange(0, half_d, 2) * -(math.log(10000.0) / half_d))
+    pe_h[:, 0::2] = np.sin(position * div_term)
+    pe_h[:, 1::2] = np.cos(position * div_term)
+    # 列方向编码
+    pe_w = np.zeros((w, half_d))
+    position = np.arange(w)[:, np.newaxis]
+    pe_w[:, 0::2] = np.sin(position * div_term)
+    pe_w[:, 1::2] = np.cos(position * div_term)
+    # 网格化拼接
+    grid_h, grid_w = np.meshgrid(np.arange(h), np.arange(w), indexing='ij')
+    pos_embed = np.concatenate([pe_h[grid_h.reshape(-1)], pe_w[grid_w.reshape(-1)]], axis=1)
+    return pos_embed  # (h*w, d_model)
+# ===== [POSITION_ENCODING_END] =====
+
 def new_forward(
     self,
     hidden_states: torch.FloatTensor,
@@ -75,6 +110,29 @@ def new_forward(
     num_views = 2   # Assuming 2 views for simplicity, can be parameterized later
     hidden_states = rearrange(hidden_states, "(b v) n d -> b (v n) d", v=num_views)
     batch_size = hidden_states.shape[0]
+
+    # ===== [POSITION_ENCODING_START] 注入模态嵌入 + 2D空间位置编码 =====
+    n = hidden_states.shape[1] // 2  # 每个视角的token数
+    
+    # 模态嵌入：IR=0, RGB=1
+    if hasattr(self, 'mod_proj'):
+        mod_ids = torch.cat([
+            torch.zeros(n, dtype=torch.long, device=hidden_states.device),
+            torch.ones(n, dtype=torch.long, device=hidden_states.device),
+        ])  # (2n,)
+        _unet_mod_embed = _GLOBAL_MODALITY_EMBED
+        if _unet_mod_embed is not None:
+            mod_embed = _unet_mod_embed(mod_ids)  # (2n, 320)
+            mod_embed = self.mod_proj(mod_embed)    # (2n, d)
+            hidden_states = hidden_states + mod_embed.unsqueeze(0)  # (b, 2n, d)
+    
+    # 2D空间位置编码（IR和RGB共享，因为空间位置是对齐的）
+    if hasattr(self, 'spatial_pos_embed'):
+        pos = self.spatial_pos_embed  # (n, d)
+        pos = pos.unsqueeze(0).expand(batch_size, -1, -1)  # (b, n, d)
+        pos = pos.repeat(1, 2, 1)  # (b, 2n, d) IR和RGB共享
+        hidden_states = hidden_states + pos
+    # ===== [POSITION_ENCODING_END] =====
 
     if self.use_ada_layer_norm:
         norm_hidden_states = self.norm1(hidden_states, timestep)
@@ -752,6 +810,36 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
             self.position_net = PositionNet(
                 positive_len=positive_len, out_dim=cross_attention_dim, feature_type=feature_type
             )
+
+        # ===== [POSITION_ENCODING_START] 注册模态嵌入层 =====
+        base_dim = block_out_channels[0]  # 320
+        self.modality_embed = nn.Embedding(2, base_dim)  # 0=IR, 1=RGB
+        # ===== [POSITION_ENCODING_END] =====
+
+    # ===== [POSITION_ENCODING_START] 注入位置编码到每个Transformer Block =====
+    def inject_position_encodings(self):
+        """将模态嵌入投影层和2D空间位置编码注入到每个 BasicTransformerBlock"""
+        for module in self.modules():
+            if isinstance(module, BasicTransformerBlock):
+                d = module.attn1.to_q.in_features  # 当前block的隐藏维度
+
+                # 模态嵌入投影层：从base_dim=320投影到当前层维度d
+                module.add_module('mod_proj', nn.Linear(320, d, bias=False))
+
+                # 根据通道数推断空间分辨率
+                if d == 320:
+                    sh, sw = 64, 64
+                elif d == 640:
+                    sh, sw = 32, 32
+                elif d == 1280:
+                    sh, sw = 16, 16
+                else:
+                    sh = sw = 8
+
+                # 生成2D正弦位置编码（注册为buffer，不参与训练）
+                pos = get_2d_sincos_pos_embed(d, sh, sw)
+                module.register_buffer('spatial_pos_embed', torch.from_numpy(pos).float())
+    # ===== [POSITION_ENCODING_END] =====
 
     @property
     def attn_processors(self) -> Dict[str, AttentionProcessor]:

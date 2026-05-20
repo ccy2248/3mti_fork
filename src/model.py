@@ -293,6 +293,12 @@ class Difix(torch.nn.Module):
         unet.to("cuda")
         vae.to("cuda")
 
+        # ===== [POSITION_ENCODING_START] 注入模态嵌入 + 2D空间位置编码 =====
+        unet.inject_position_encodings()
+        import mv_unet
+        mv_unet._GLOBAL_MODALITY_EMBED = unet.modality_embed
+        # ===== [POSITION_ENCODING_END] =====
+
         self.unet, self.vae = unet, vae
         self.vae.decoder.gamma = 1
         self.timesteps = torch.tensor([timestep], device="cuda").long()
