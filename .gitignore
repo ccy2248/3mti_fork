@@ -60,3 +60,10 @@ logs/
 tmp/
 temp/
 .cache/
+
+
+# 实验输出文件
+output_*/
+*.png
+picture/output/
+picture/vis/
