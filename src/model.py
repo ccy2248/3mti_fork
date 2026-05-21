@@ -194,11 +194,11 @@ def save_ckpt(net_difix, optimizer, outf):
 class Difix(torch.nn.Module):
     def __init__(self, pretrained_name=None, pretrained_path=None, ckpt_folder="checkpoints", lora_rank_vae=4, mv_unet=False, timestep=999):
         super().__init__()
-        self.tokenizer = AutoTokenizer.from_pretrained("/home/user/Workspace/3mti/models/sd-turbo/", subfolder="tokenizer")
-        self.text_encoder = CLIPTextModel.from_pretrained("/home/user/Workspace/3mti/models/sd-turbo/", subfolder="text_encoder").cuda()
+        self.tokenizer = AutoTokenizer.from_pretrained("/home/user/Workspace/3mti/models/sd-turbo", subfolder="tokenizer")
+        self.text_encoder = CLIPTextModel.from_pretrained("/home/user/Workspace/3mti/models/sd-turbo", subfolder="text_encoder").cuda()
         self.sched = make_1step_sched()
 
-        vae = AutoencoderKL.from_pretrained("/home/user/Workspace/3mti/models/sd-turbo/", subfolder="vae")
+        vae = AutoencoderKL.from_pretrained("/home/user/Workspace/3mti/models/sd-turbo", subfolder="vae")
         vae.encoder.forward = my_vae_encoder_fwd.__get__(vae.encoder, vae.encoder.__class__)
         vae.decoder.forward = my_vae_decoder_fwd.__get__(vae.decoder, vae.decoder.__class__)
         # add the skip connection convs
@@ -213,7 +213,12 @@ class Difix(torch.nn.Module):
         else:
             from diffusers import UNet2DConditionModel
 
-        unet = UNet2DConditionModel.from_pretrained("/home/user/Workspace/3mti/models/sd-turbo/", subfolder="unet")
+        unet = UNet2DConditionModel.from_pretrained(
+            "/home/user/Workspace/3mti/models/sd-turbo", 
+            subfolder="unet",
+            low_cpu_mem_usage=False, # 关键：关闭内存优化
+            device_map=None         # 关键：不使用设备映射
+        )
 
         if pretrained_path is not None:
             sd = torch.load(pretrained_path, map_location="cpu")

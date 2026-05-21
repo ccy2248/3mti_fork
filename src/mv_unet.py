@@ -111,29 +111,29 @@ def new_forward(
     hidden_states = rearrange(hidden_states, "(b v) n d -> b (v n) d", v=num_views)
     batch_size = hidden_states.shape[0]
 
-    # ===== [POSITION_ENCODING_START] 注入模态嵌入 + 2D空间位置编码 =====
-    n = hidden_states.shape[1] // 2  # 每个视角的token数
-    
-    # 模态嵌入：IR=0, RGB=1
+
+    # ===== [POSITION_ENCODING_START] 动态适配位置编码 =====
+    # 假设 hidden_states 形状: [Batch, Sequence_Length, Channels]
+    total_tokens = hidden_states.shape[1] 
+    n = total_tokens // 2 # 单张图的 Token 数 (例如 8192//2 = 4096)
+    # ===== 模态嵌入注入：区分 IR 和 RGB 视角 =====
     if hasattr(self, 'mod_proj'):
         mod_ids = torch.cat([
-            torch.zeros(n, dtype=torch.long, device=hidden_states.device),
-            torch.ones(n, dtype=torch.long, device=hidden_states.device),
+            torch.zeros(n, dtype=torch.long, device=hidden_states.device),   # IR视角
+            torch.ones(n, dtype=torch.long, device=hidden_states.device),    # RGB视角
         ])  # (2n,)
         _unet_mod_embed = _GLOBAL_MODALITY_EMBED
         if _unet_mod_embed is not None:
             mod_embed = _unet_mod_embed(mod_ids)  # (2n, 320)
-            mod_embed = self.mod_proj(mod_embed)    # (2n, d)
+            mod_embed = self.mod_proj(mod_embed)   # (2n, d)
             hidden_states = hidden_states + mod_embed.unsqueeze(0)  # (b, 2n, d)
-    
-    # 2D空间位置编码（IR和RGB共享，因为空间位置是对齐的）
+    # ===== 模态嵌入结束 =====
     if hasattr(self, 'spatial_pos_embed'):
-        pos = self.spatial_pos_embed  # (n, d)
+        pos = self.spatial_pos_embed  # (n, d)，inject已生成正确大小
         pos = pos.unsqueeze(0).expand(batch_size, -1, -1)  # (b, n, d)
-        pos = pos.repeat(1, 2, 1)  # (b, 2n, d) IR和RGB共享
+        pos = pos.repeat(1, 2, 1)  # (b, 2n, d)
         hidden_states = hidden_states + pos
     # ===== [POSITION_ENCODING_END] =====
-
     if self.use_ada_layer_norm:
         norm_hidden_states = self.norm1(hidden_states, timestep)
     elif self.use_ada_layer_norm_zero:
@@ -819,26 +819,44 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
     # ===== [POSITION_ENCODING_START] 注入位置编码到每个Transformer Block =====
     def inject_position_encodings(self):
         """将模态嵌入投影层和2D空间位置编码注入到每个 BasicTransformerBlock"""
-        for module in self.modules():
-            if isinstance(module, BasicTransformerBlock):
-                d = module.attn1.to_q.in_features  # 当前block的隐藏维度
+        base_dim = 320
+        spatial = self.config.sample_size  # 64 for SD Turbo
 
-                # 模态嵌入投影层：从base_dim=320投影到当前层维度d
-                module.add_module('mod_proj', nn.Linear(320, d, bias=False))
+        def _inject(block, sh, sw):
+            d = block.attn1.to_q.in_features
+            block.add_module('mod_proj', nn.Linear(base_dim, d, bias=False))
+            pos = get_2d_sincos_pos_embed(d, sh, sw)
+            block.register_buffer('spatial_pos_embed', torch.from_numpy(pos).float())
 
-                # 根据通道数推断空间分辨率
-                if d == 320:
-                    sh, sw = 64, 64
-                elif d == 640:
-                    sh, sw = 32, 32
-                elif d == 1280:
-                    sh, sw = 16, 16
-                else:
-                    sh = sw = 8
+        # Down Blocks: 先处理当前分辨率，再下采样
+        for block in self.down_blocks:
+            if hasattr(block, 'attentions'):
+                for attn in block.attentions:
+                    if hasattr(attn, 'transformer_blocks'):
+                        for tb in attn.transformer_blocks:
+                            if isinstance(tb, BasicTransformerBlock):
+                                _inject(tb, spatial, spatial)
+            if hasattr(block, 'downsamplers') and block.downsamplers and len(block.downsamplers) > 0:
+                spatial = spatial // 2
 
-                # 生成2D正弦位置编码（注册为buffer，不参与训练）
-                pos = get_2d_sincos_pos_embed(d, sh, sw)
-                module.register_buffer('spatial_pos_embed', torch.from_numpy(pos).float())
+        # Mid Block
+        if self.mid_block is not None and hasattr(self.mid_block, 'attentions'):
+            for attn in self.mid_block.attentions:
+                if hasattr(attn, 'transformer_blocks'):
+                    for tb in attn.transformer_blocks:
+                        if isinstance(tb, BasicTransformerBlock):
+                            _inject(tb, spatial, spatial)
+
+        # Up Blocks: 先处理当前分辨率，再上采样
+        for block in self.up_blocks:
+            if hasattr(block, 'attentions'):
+                for attn in block.attentions:
+                    if hasattr(attn, 'transformer_blocks'):
+                        for tb in attn.transformer_blocks:
+                            if isinstance(tb, BasicTransformerBlock):
+                                _inject(tb, spatial, spatial)
+            if hasattr(block, 'upsamplers') and block.upsamplers and len(block.upsamplers) > 0:
+                spatial = spatial * 2
     # ===== [POSITION_ENCODING_END] =====
 
     @property
