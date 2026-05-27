@@ -64,33 +64,6 @@ import numpy as np
 
 # 全局变量，用于在 new_forward 中访问 UNet 的模态嵌入
 _GLOBAL_MODALITY_EMBED = None
-
-def get_2d_sincos_pos_embed(d_model, h, w):
-    """
-    生成2D正弦余弦位置编码
-    Args:
-        d_model: 嵌入维度（必须是4的倍数）
-        h, w: 空间高度和宽度
-    Returns:
-        pos_embed: (h*w, d_model)
-    """
-    assert d_model % 4 == 0, "d_model must be divisible by 4"
-    half_d = d_model // 2
-    # 行方向编码
-    pe_h = np.zeros((h, half_d))
-    position = np.arange(h)[:, np.newaxis]
-    div_term = np.exp(np.arange(0, half_d, 2) * -(math.log(10000.0) / half_d))
-    pe_h[:, 0::2] = np.sin(position * div_term)
-    pe_h[:, 1::2] = np.cos(position * div_term)
-    # 列方向编码
-    pe_w = np.zeros((w, half_d))
-    position = np.arange(w)[:, np.newaxis]
-    pe_w[:, 0::2] = np.sin(position * div_term)
-    pe_w[:, 1::2] = np.cos(position * div_term)
-    # 网格化拼接
-    grid_h, grid_w = np.meshgrid(np.arange(h), np.arange(w), indexing='ij')
-    pos_embed = np.concatenate([pe_h[grid_h.reshape(-1)], pe_w[grid_w.reshape(-1)]], axis=1)
-    return pos_embed  # (h*w, d_model)
 # ===== [POSITION_ENCODING_END] =====
 
 def new_forward(
@@ -128,11 +101,6 @@ def new_forward(
             mod_embed = self.mod_proj(mod_embed)   # (2n, d)
             hidden_states = hidden_states + mod_embed.unsqueeze(0)  # (b, 2n, d)
     # ===== 模态嵌入结束 =====
-    if hasattr(self, 'spatial_pos_embed'):
-        pos = self.spatial_pos_embed  # (n, d)，inject已生成正确大小
-        pos = pos.unsqueeze(0).expand(batch_size, -1, -1)  # (b, n, d)
-        pos = pos.repeat(1, 2, 1)  # (b, 2n, d)
-        hidden_states = hidden_states + pos
     # ===== [POSITION_ENCODING_END] =====
     if self.use_ada_layer_norm:
         norm_hidden_states = self.norm1(hidden_states, timestep)
@@ -825,8 +793,8 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
         def _inject(block, sh, sw):
             d = block.attn1.to_q.in_features
             block.add_module('mod_proj', nn.Linear(base_dim, d, bias=False))
-            pos = get_2d_sincos_pos_embed(d, sh, sw)
-            block.register_buffer('spatial_pos_embed', torch.from_numpy(pos).float())
+            nn.init.zeros_(block.mod_proj.weight)
+            
 
         # Down Blocks: 先处理当前分辨率，再下采样
         for block in self.down_blocks:
