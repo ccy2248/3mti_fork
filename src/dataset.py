@@ -1,10 +1,40 @@
 import json
 import torch
+import numpy as np
 from PIL import Image
 import torchvision.transforms.functional as F
 import os
 from torchvision import transforms
 import random
+
+# ====== TIF 卫星图支持 (参考 UnCRtainTS 处理方式) ======
+try:
+    import rasterio
+    HAS_RASTERIO = True
+except ImportError:
+    HAS_RASTERIO = False
+    print("[WARN] rasterio not installed, .tif support disabled")
+
+def read_tif(path):
+    """rasterio 读取 tif → float32 numpy [C, H, W]"""
+    with rasterio.open(path) as src:
+        return src.read().astype(np.float32)
+
+def process_MS(img):
+    """Sentinel-2 RGB/cloudy: clip [0,10000] → rescale → [0,1]"""
+    img = np.clip(img, 0.0, 10000.0)
+    img = img / 10000.0
+    return img  # [0, 1]
+
+def process_SAR(img, sar_type='vh'):
+    """Sentinel-1 SAR VH/VV: clip dB → rescale → [0,1]"""
+    if sar_type == 'vh':
+        dB_min, dB_max = -32.5, 0.0   # VH 交叉极化
+    else:
+        dB_min, dB_max = -25.0, 0.0   # VV 同极化
+    img = np.clip(img, dB_min, dB_max)
+    img = (img - dB_min) / (dB_max - dB_min)
+    return img  # [0, 1]
 
 def add_combined_noise_torch(
     image,
@@ -78,8 +108,11 @@ class RandomSubsetColorJitter:
         return img
 
 class PairedDataset(torch.utils.data.Dataset):
-    def __init__(self, dataset_path, split, height=512, width=512, tokenizer=None, prompts_file=None):
+    def __init__(self, dataset_path, split, height=512, width=512, tokenizer=None, prompts_file=None, use_tif=False, sar_type='vh'):
         super().__init__()
+
+        self.use_tif = use_tif       # True: 用 rasterio 读 .tif
+        self.sar_type = sar_type     # 'vh' or 'vv', 仅 tif 模式生效
 
         with open(dataset_path, 'r') as f:
             json_data = json.load(f)[split]
@@ -98,19 +131,21 @@ class PairedDataset(torch.utils.data.Dataset):
                         filename, prompt = line.strip().split(":", 1)
                         self.extra_prompts[filename.strip()] = prompt.strip()
 
+        VALID_EXTS = ('.png', '.jpg', '.jpeg', '.tif', '.tiff')
+
         self.image_files = sorted([
             os.path.join(self.image_dir, f) for f in os.listdir(self.image_dir)
-            if f.endswith(('.png', '.jpg', '.jpeg'))
+            if f.endswith(VALID_EXTS)
         ])
         self.target_files = sorted([
             os.path.join(self.target_dir, f) for f in os.listdir(self.target_dir)
-            if f.endswith(('.png', '.jpg', '.jpeg'))
+            if f.endswith(VALID_EXTS)
         ])
 
         if self.ref_dir:
             self.ref_files = sorted([
                 os.path.join(self.ref_dir, f) for f in os.listdir(self.ref_dir)
-                if f.endswith(('.png', '.jpg', '.jpeg'))
+                if f.endswith(VALID_EXTS)
             ])
         else:
             self.ref_files = [None] * len(self.image_files)
@@ -153,8 +188,21 @@ class PairedDataset(torch.utils.data.Dataset):
         pseudo = False
 
         try:
-            input_img = Image.open(input_path).convert("RGB")
-            target_img = Image.open(target_path).convert("RGB")
+            if self.use_tif and HAS_RASTERIO:
+                # ---- TIF 模式 (UnCRtainTS 风格归一化) ----
+                cloudy_np  = read_tif(input_path)          # [3, H, W] float32
+                target_np  = read_tif(target_path)         # [3, H, W] float32
+                cloudy_np  = process_MS(cloudy_np)         # → [0, 1]
+                target_np  = process_MS(target_np)         # → [0, 1]
+
+                input_tensor  = torch.from_numpy(cloudy_np)
+                target_tensor = torch.from_numpy(target_np)
+            else:
+                # ---- PNG/JPG 模式 (原有 PIL 逻辑) ----
+                input_img = Image.open(input_path).convert("RGB")
+                target_img = Image.open(target_path).convert("RGB")
+                input_tensor  = F.to_tensor(input_img)
+                target_tensor = F.to_tensor(target_img)
         except Exception as e:
             print(f"Error loading images: {input_path}, {target_path}")
             return self.__getitem__((idx + 1) % len(self))
@@ -179,8 +227,19 @@ class PairedDataset(torch.utils.data.Dataset):
         target_tensor = F.normalize(target_tensor, mean=[0.5], std=[0.5])
 
         if ref_path is not None:
-            ref_img = Image.open(ref_path).convert("RGB")
-            ref_tensor = F.to_tensor(ref_img)
+            if self.use_tif and HAS_RASTERIO:
+                # ---- TIF SAR 参考图 ----
+                sar_np = read_tif(ref_path)                 # [1, H, W] or [H, W] float32
+                sar_np = process_SAR(sar_np, self.sar_type) # → [0, 1]
+                # 单通道 SAR → 复制为 3 通道（适配 VAE 输入）
+                if sar_np.ndim == 2:
+                    sar_np = sar_np[np.newaxis, ...]  # [1, H, W]
+                if sar_np.shape[0] == 1:
+                    sar_np = np.repeat(sar_np, 3, axis=0)  # [3, H, W]
+                ref_tensor = torch.from_numpy(sar_np)
+            else:
+                ref_img = Image.open(ref_path).convert("RGB")
+                ref_tensor = F.to_tensor(ref_img)
             ref_tensor = F.resize(ref_tensor, self.image_size)
             ref_tensor = F.normalize(ref_tensor, mean=[0.5], std=[0.5])
 
