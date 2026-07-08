@@ -1,0 +1,30 @@
+# 大文件
+*.pkl
+*.pth
+*.tar
+*.zip
+*.safetensors
+*.msgpack
+*.h5
+*.ot
+
+# 模型权重
+models/
+trained_model/
+
+# 数据集
+data/sen12mscr/
+data/C-CUHK/
+data/output_png/
+
+# 日志
+*.out
+*.err
+debug/
+
+# Python
+__pycache__/
+*.pyc
+
+# IDE
+.vscode/

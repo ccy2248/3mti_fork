@@ -1,0 +1,14 @@
+{
+    "train": {
+        "target_image": "/tmp/train/rgb",
+        "image": "/tmp/train/rgb_cloudy",
+        "ref_image": "/tmp/train/vh",
+        "prompt": "remove cloud"
+    },
+    "test": {
+        "target_image": "/tmp/val/rgb",
+        "image": "/tmp/val/rgb_cloudy",
+        "ref_image": "/tmp/val/vh",
+        "prompt": "remove cloud"
+    }
+}
