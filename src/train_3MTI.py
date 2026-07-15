@@ -99,10 +99,13 @@ def main(args):
         num_training_steps=args.max_train_steps * accelerator.num_processes,
         num_cycles=args.lr_num_cycles, power=args.lr_power,)    
 
-    # tif 模式: 使用 UnCRtainTS 归一化 (S2 clip[0,10000], SAR VH clip[-32.5,0])
+    # 不使用 prompts_file，所有样本统一用 json 中的 "remove cloud" 作为提示词
+    # 如需恢复语义提示词，取消下面注释并传入对应 prompt 文件路径:
+    # dataset_train = PairedDataset(dataset_path=args.dataset_path, split="train", tokenizer=net_difix.tokenizer, prompts_file="/data/home/scxk346/run/workspace/3mti/data/sen12mscr/train_vv_prompt.txt")
     dataset_train = PairedDataset(dataset_path=args.dataset_path, split="train", tokenizer=net_difix.tokenizer, use_tif=True, sar_type='vh')
     dl_train = torch.utils.data.DataLoader(dataset_train, batch_size=args.train_batch_size, shuffle=True, num_workers=args.dataloader_num_workers)
 
+    # dataset_val = PairedDataset(dataset_path=args.dataset_path, split="test", tokenizer=net_difix.tokenizer, prompts_file="/data/home/scxk346/run/workspace/3mti/data/sen12mscr/val_vv_prompt.txt")
     dataset_val = PairedDataset(dataset_path=args.dataset_path, split="test", tokenizer=net_difix.tokenizer, use_tif=True, sar_type='vh')
     dl_val = torch.utils.data.DataLoader(dataset_val, batch_size=1, shuffle=False, num_workers=0)
     #random.Random(42).shuffle(dataset_val.img_ids)
@@ -200,6 +203,17 @@ def main(args):
                 loss_lpips = net_lpips(x_tgt_pred.float(), x_tgt.float()).mean() * args.lambda_lpips
                 loss = loss_l2 + loss_lpips
                 
+                # ====== NaN 诊断 & 跳过 ======
+                if torch.isnan(loss) or torch.isinf(loss):
+                    fnames = batch.get("filename", ["unknown"])
+                    print(f"\n[NaN DETECTED] step={global_step}, file={fnames}")
+                    print(f"  x_src  range=[{x_src.min():.4f}, {x_src.max():.4f}] nan={torch.isnan(x_src).any()} inf={torch.isinf(x_src).any()}")
+                    print(f"  x_tgt  range=[{x_tgt.min():.4f}, {x_tgt.max():.4f}] nan={torch.isnan(x_tgt).any()} inf={torch.isinf(x_tgt).any()}")
+                    print(f"  x_pred range=[{x_tgt_pred.min():.4f}, {x_tgt_pred.max():.4f}] nan={torch.isnan(x_tgt_pred).any()} inf={torch.isinf(x_tgt_pred).any()}")
+                    print(f"  loss_l2={loss_l2:.6f} loss_lpips={loss_lpips:.6f}")
+                    optimizer.zero_grad(set_to_none=args.set_grads_to_none)
+                    continue
+
                 # Gram matrix loss
                 # if args.lambda_gram > 0:
                 #     if global_step > args.gram_loss_warmup_steps:

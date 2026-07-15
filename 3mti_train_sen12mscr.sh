@@ -10,28 +10,34 @@ module load miniforge3/26.1
 eval "$(conda shell.bash hook)"
 conda activate 3mti
 
-# ====== 唯一数据目录（防冲突） ======
-DATA_DIR="/tmp/sen12mscr_${SLURM_JOB_ID}"
-rm -rf "$DATA_DIR" /tmp/train /tmp/val 2>/dev/null
+# ====== 任务时间记录 ======
+JOB_START_EPOCH=$(date +%s)
+echo "=========================================="
+echo "Job ${SLURM_JOB_ID} started at: $(date '+%Y-%m-%d %H:%M:%S')"
+echo "=========================================="
 
-# 检查 /tmp 是否有足够空间 (trail 数据集需要 10G 以上)
+# ====== 唯一数据目录（防冲突） ======
+TRAIN_DIR="/tmp/train_${SLURM_JOB_ID}"
+VAL_DIR="/tmp/val_${SLURM_JOB_ID}"
+rm -rf "$TRAIN_DIR" "$VAL_DIR" /tmp/train /tmp/val 2>/dev/null
+
+# 检查 /tmp 空间
 AVAIL_GB=$(df --output=avail /tmp | tail -1 | awk '{print int($1/1024/1024)}')
 echo "/tmp 可用空间: ${AVAIL_GB}G"
-if [ "$AVAIL_GB" -lt 10 ]; then
-    echo "❌ /tmp 空间不足 (需 10G, 仅 ${AVAIL_GB}G), 任务终止"
+if [ "$AVAIL_GB" -lt 130 ]; then
+    echo "❌ /tmp 空间不足 (需 130G, 仅 ${AVAIL_GB}G), 任务终止"
     exit 1
 fi
 
-mkdir -p "$DATA_DIR/train" "$DATA_DIR/val"
-# 创建软链接，让 json 里的 /tmp/train → $DATA_DIR/train
-ln -s "$DATA_DIR/train" /tmp/train
-ln -s "$DATA_DIR/val" /tmp/val
+mkdir -p "$TRAIN_DIR" "$VAL_DIR"
+ln -s "$TRAIN_DIR" /tmp/train
+ln -s "$VAL_DIR" /tmp/val
 
 # ====== 解压数据集到节点本地 ======
-echo "📦 第1步: 解压 train.tar → $DATA_DIR"
+echo "📦 第1步: 解压 train.tar → $TRAIN_DIR"
 
 START_TIME=$(date +%s)
-tar -xf /data/home/scxk346/run/workspace/3mti/data/sen12mscr/trail_vh_rf_tif_train.tar -C "$DATA_DIR/" &
+tar -xf /data/home/scxk346/run/workspace/3mti/data/sen12mscr/sen12mscr_vh_rf_tif_train.tar -C "$TRAIN_DIR/" &
 TAR_PID=$!
 
 echo "  Time  |  Files Done  |  Disk Usage"
@@ -40,17 +46,17 @@ while kill -0 $TAR_PID 2>/dev/null; do
     sleep 5
     NOW=$(date +%s)
     ELAPSED=$((NOW - START_TIME))
-    COUNT=$(find "$DATA_DIR/train/" -name '*.tif' 2>/dev/null | wc -l)
-    SIZE=$(du -sh "$DATA_DIR/train/" 2>/dev/null | cut -f1)
+    COUNT=$(find "$TRAIN_DIR/" -name '*.tif' 2>/dev/null | wc -l)
+    SIZE=$(du -sh "$TRAIN_DIR/" 2>/dev/null | cut -f1)
     printf "  %4ds |  %8d   |  %5s\n" "$ELAPSED" "$COUNT" "$SIZE"
 done
 wait $TAR_PID
-echo "✅ train 解压完成: $(( $(date +%s) - START_TIME ))s, $(find "$DATA_DIR/train/" -name '*.tif' | wc -l) files"
+echo "✅ train 解压完成: $(( $(date +%s) - START_TIME ))s, $(find "$TRAIN_DIR/" -name '*.tif' | wc -l) files"
 
 echo ""
-echo "📦 第2步: 解压 val.tar → $DATA_DIR"
+echo "📦 第2步: 解压 val.tar → $VAL_DIR"
 START_TIME=$(date +%s)
-tar -xf /data/home/scxk346/run/workspace/3mti/data/sen12mscr/trail_vh_rf_tif_val.tar -C "$DATA_DIR/" &
+tar -xf /data/home/scxk346/run/workspace/3mti/data/sen12mscr/sen12mscr_vh_rf_tif_val.tar -C "$VAL_DIR/" &
 TAR_PID=$!
 
 echo "  Time  |  Files Done  |  Disk Usage"
@@ -59,18 +65,18 @@ while kill -0 $TAR_PID 2>/dev/null; do
     sleep 3
     NOW=$(date +%s)
     ELAPSED=$((NOW - START_TIME))
-    COUNT=$(find "$DATA_DIR/val/" -name '*.tif' 2>/dev/null | wc -l)
-    SIZE=$(du -sh "$DATA_DIR/val/" 2>/dev/null | cut -f1)
+    COUNT=$(find "$VAL_DIR/" -name '*.tif' 2>/dev/null | wc -l)
+    SIZE=$(du -sh "$VAL_DIR/" 2>/dev/null | cut -f1)
     printf "  %4ds |  %8d   |  %5s\n" "$ELAPSED" "$COUNT" "$SIZE"
 done
 wait $TAR_PID
-echo "✅ val 解压完成: $(( $(date +%s) - START_TIME ))s, $(find "$DATA_DIR/val/" -name '*.tif' | wc -l) files"
+echo "✅ val 解压完成: $(( $(date +%s) - START_TIME ))s, $(find "$VAL_DIR/" -name '*.tif' | wc -l) files"
 
 # 进入项目目录
 cd /data/home/scxk346/run/workspace/3mti
 
 # 设置路径
-OUTPUT_DIR="/data/home/scxk346/run/workspace/3mti/trained_model/sen12mscr_tif_vh"
+OUTPUT_DIR="/data/home/scxk346/run/workspace/3mti/trained_model/sen12mscr_tif_vh_l2x100"
 DATASET_PATH="/data/home/scxk346/run/workspace/3mti/dataset/your_dataset.json"
 
 # 创建输出目录
@@ -92,7 +98,7 @@ accelerate launch \
     --report_to tensorboard \
     --max_train_steps=8000 \
     --resolution=512 \
-    --learning_rate=2e-5 \
+    --learning_rate=1e-5 \
     --train_batch_size=1 \
     --dataloader_num_workers=4 \
     --enable_xformers_memory_efficient_attention \
@@ -101,7 +107,7 @@ accelerate launch \
     --eval_freq=1000 \
     --num_samples_eval=10 \
     --lambda_lpips=1.0 \
-    --lambda_l2=1.0 \
+    --lambda_l2=100.0 \
     --tracker_project_name="3mti_sen12mscr" \
     --tracker_run_name="cloud_removal_tif_vh" \
     --timestep=199 \
@@ -109,7 +115,12 @@ accelerate launch \
     --set_grads_to_none
 
 # 检查结果
-if [ $? -eq 0 ]; then
+TRAIN_EXIT_CODE=$?
+JOB_END_EPOCH=$(date +%s)
+ELAPSED=$((JOB_END_EPOCH - JOB_START_EPOCH))
+ELAPSED_FMT=$(printf '%02dh:%02dm:%02ds' $((ELAPSED/3600)) $((ELAPSED%3600/60)) $((ELAPSED%60)))
+
+if [ $TRAIN_EXIT_CODE -eq 0 ]; then
     echo "=========================================="
     echo "Training completed successfully!"
     echo "Checkpoints saved to: $OUTPUT_DIR/checkpoints/"
@@ -117,11 +128,17 @@ if [ $? -eq 0 ]; then
     echo "=========================================="
 else
     echo "ERROR: Training failed!"
+fi
+echo ""
+echo "=========================================="
+echo "Job ${SLURM_JOB_ID} ended at:   $(date '+%Y-%m-%d %H:%M:%S')"
+echo "Total elapsed time:            ${ELAPSED_FMT}"
+echo "=========================================="
+
+if [ $TRAIN_EXIT_CODE -ne 0 ]; then
     exit 1
 fi
 
-echo "End Time: $(date)"
-
 # ====== 清理 ======
-rm -rf "$DATA_DIR"
+rm -rf "$TRAIN_DIR" "$VAL_DIR" /tmp/train /tmp/val
 echo "Cleaned up local data."

@@ -204,10 +204,14 @@ class PairedDataset(torch.utils.data.Dataset):
                 input_tensor  = F.to_tensor(input_img)
                 target_tensor = F.to_tensor(target_img)
         except Exception as e:
-            print(f"Error loading images: {input_path}, {target_path}")
+            # 重试最多 100 次，防止无限递归
+            retry = getattr(self, '_retry_count', 0) + 1
+            self._retry_count = retry
+            if retry > 100:
+                raise RuntimeError(f"Failed to load any image after 100 retries. Last error: {e}")
+            print(f"Error loading images: {input_path}, {target_path}, retry={retry}")
             return self.__getitem__((idx + 1) % len(self))
 
-        input_tensor = F.to_tensor(input_img)
         if pseudo and random.random() < 0.6:
             input_tensor = add_combined_noise_torch(
             input_tensor,
@@ -222,7 +226,6 @@ class PairedDataset(torch.utils.data.Dataset):
         # 去云任务：直接 256→512 resize（不做 128 退化模拟）
         input_tensor = F.resize(input_tensor, self.image_size)
 
-        target_tensor = F.to_tensor(target_img)
         target_tensor = F.resize(target_tensor, self.image_size)
         target_tensor = F.normalize(target_tensor, mean=[0.5], std=[0.5])
 

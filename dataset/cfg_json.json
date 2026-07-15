@@ -1,0 +1,18 @@
+{
+    "train": {
+        "target_image": "/tmp/train/rgb",
+        "target_neg": "/tmp/train/rgb_cloudy",
+        "image": "/tmp/train/rgb_cloudy",
+        "ref_image": "/tmp/train/vh",
+        "prompt": "high-quality cloud-free clear image",
+        "prompt_neg": "original degraded cloudy image"
+    },
+    "test": {
+        "target_image": "/tmp/val/rgb",
+        "target_neg": "/tmp/val/rgb_cloudy",
+        "image": "/tmp/val/rgb_cloudy",
+        "ref_image": "/tmp/val/vh",
+        "prompt": "high-quality cloud-free clear image",
+        "prompt_neg": "original degraded cloudy image"
+    }
+}

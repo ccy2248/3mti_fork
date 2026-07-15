@@ -69,4 +69,21 @@ else
 fi
 
 echo ""
+echo "=========================================="
+echo "📊 /tmp 内容一览 (按大小排序, Top 20)"
+echo "=========================================="
+du -sm /tmp/* /tmp/.* 2>/dev/null | sort -rn | head -20 | while read size path; do
+    if [ "$size" -ge 1 ]; then
+        printf "  %6d MB  %s\n" "$size" "$path"
+    fi
+done
+
+echo ""
+echo "=========================================="
+echo "📊 /tmp 总览"
+echo "=========================================="
+echo "  已用: $(du -sh /tmp 2>/dev/null | cut -f1)"
+df -h /tmp | tail -1
+
+echo ""
 echo "Done."
