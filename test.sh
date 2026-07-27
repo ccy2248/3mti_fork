@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --gpus=1
+#SBATCH --gpus=2
 #SBATCH -p gpu_4090
 #SBATCH --job-name=storage-probe
 #SBATCH --output=storage_probe_%j.out

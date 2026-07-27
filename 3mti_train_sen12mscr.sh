@@ -76,8 +76,8 @@ echo "✅ val 解压完成: $(( $(date +%s) - START_TIME ))s, $(find "$VAL_DIR/"
 cd /data/home/scxk346/run/workspace/3mti
 
 # 设置路径
-OUTPUT_DIR="/data/home/scxk346/run/workspace/3mti/trained_model/sen12mscr_tif_vh_l2x100"
-DATASET_PATH="/data/home/scxk346/run/workspace/3mti/dataset/your_dataset.json"
+OUTPUT_DIR="/data/home/scxk346/run/workspace/3mti/trained_model/sen12mscr_tif_vh_cfg_lpips1_l2x1"
+DATASET_PATH="/data/home/scxk346/run/workspace/3mti/dataset/cfg_json.json"
 
 # 创建输出目录
 mkdir -p "$OUTPUT_DIR/checkpoints"
@@ -107,12 +107,14 @@ accelerate launch \
     --eval_freq=1000 \
     --num_samples_eval=10 \
     --lambda_lpips=1.0 \
-    --lambda_l2=100.0 \
+    --lambda_l2=1.0 \
     --tracker_project_name="3mti_sen12mscr" \
-    --tracker_run_name="cloud_removal_tif_vh" \
+    --tracker_run_name="cloud_removal_tif_vh_cfg_lpips1_l2x1" \
     --timestep=199 \
     --mv_unet \
-    --set_grads_to_none
+    --set_grads_to_none \
+    --cfg_mode \
+    --cfg_pos_ratio 0.7
 
 # 检查结果
 TRAIN_EXIT_CODE=$?

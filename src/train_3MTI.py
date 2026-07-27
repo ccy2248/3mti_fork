@@ -102,11 +102,11 @@ def main(args):
     # 不使用 prompts_file，所有样本统一用 json 中的 "remove cloud" 作为提示词
     # 如需恢复语义提示词，取消下面注释并传入对应 prompt 文件路径:
     # dataset_train = PairedDataset(dataset_path=args.dataset_path, split="train", tokenizer=net_difix.tokenizer, prompts_file="/data/home/scxk346/run/workspace/3mti/data/sen12mscr/train_vv_prompt.txt")
-    dataset_train = PairedDataset(dataset_path=args.dataset_path, split="train", tokenizer=net_difix.tokenizer, use_tif=True, sar_type='vh')
+    dataset_train = PairedDataset(dataset_path=args.dataset_path, split="train", tokenizer=net_difix.tokenizer, use_tif=True, sar_type='vh', cfg_mode=args.cfg_mode, cfg_pos_ratio=args.cfg_pos_ratio)
     dl_train = torch.utils.data.DataLoader(dataset_train, batch_size=args.train_batch_size, shuffle=True, num_workers=args.dataloader_num_workers)
 
     # dataset_val = PairedDataset(dataset_path=args.dataset_path, split="test", tokenizer=net_difix.tokenizer, prompts_file="/data/home/scxk346/run/workspace/3mti/data/sen12mscr/val_vv_prompt.txt")
-    dataset_val = PairedDataset(dataset_path=args.dataset_path, split="test", tokenizer=net_difix.tokenizer, use_tif=True, sar_type='vh')
+    dataset_val = PairedDataset(dataset_path=args.dataset_path, split="test", tokenizer=net_difix.tokenizer, use_tif=True, sar_type='vh', cfg_mode=args.cfg_mode, cfg_pos_ratio=args.cfg_pos_ratio)
     dl_val = torch.utils.data.DataLoader(dataset_val, batch_size=1, shuffle=False, num_workers=0)
     #random.Random(42).shuffle(dataset_val.img_ids)
 
@@ -350,6 +350,12 @@ if __name__ == "__main__":
     parser.add_argument("--train_image_prep", default="resized_crop_512", type=str)
     parser.add_argument("--test_image_prep", default="resized_crop_512", type=str)
     parser.add_argument("--prompt", default=None, type=str)
+
+    # 【CFG】正负样本策略
+    parser.add_argument("--cfg_mode", action="store_true",
+        help="Enable CFG training with positive/negative samples.")
+    parser.add_argument("--cfg_pos_ratio", type=float, default=0.7,
+        help="Ratio of positive samples in CFG mode (default: 0.7).")
 
     # validation eval args
     parser.add_argument("--eval_freq", default=100, type=int)

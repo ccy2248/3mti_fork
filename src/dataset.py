@@ -108,11 +108,15 @@ class RandomSubsetColorJitter:
         return img
 
 class PairedDataset(torch.utils.data.Dataset):
-    def __init__(self, dataset_path, split, height=512, width=512, tokenizer=None, prompts_file=None, use_tif=False, sar_type='vh'):
+    def __init__(self, dataset_path, split, height=512, width=512, tokenizer=None, prompts_file=None, use_tif=False, sar_type='vh', cfg_mode=False, cfg_pos_ratio=0.7):
         super().__init__()
 
         self.use_tif = use_tif       # True: 用 rasterio 读 .tif
         self.sar_type = sar_type     # 'vh' or 'vv', 仅 tif 模式生效
+
+        # 【CFG】正负样本策略开关
+        self.cfg_mode = cfg_mode
+        self.cfg_pos_ratio = cfg_pos_ratio  # 正样本比例，默认 0.7
 
         with open(dataset_path, 'r') as f:
             json_data = json.load(f)[split]
@@ -121,6 +125,14 @@ class PairedDataset(torch.utils.data.Dataset):
         self.target_dir = json_data['target_image']
         self.ref_dir = json_data.get('ref_image', None)
         self.prompt = json_data['prompt']
+
+        # 【CFG】读取负向 prompt 和负向 target（可选，cfg_mode=True 时生效）
+        if self.cfg_mode:
+            self.prompt_neg = json_data.get('prompt_neg', self.prompt)
+            self.target_neg_dir = json_data.get('target_neg', None)
+        else:
+            self.prompt_neg = None
+            self.target_neg_dir = None
 
         # loda prompt file
         self.extra_prompts = {}
@@ -149,10 +161,23 @@ class PairedDataset(torch.utils.data.Dataset):
             ])
         else:
             self.ref_files = [None] * len(self.image_files)
-        
 
-        assert len(self.image_files) == len(self.target_files) == len(self.ref_files), \
-            "The number of input, target, and reference images must be consistent."
+        # 【CFG】加载负样本 target 文件列表
+        if self.cfg_mode and self.target_neg_dir is not None:
+            self.target_neg_files = sorted([
+                os.path.join(self.target_neg_dir, f) for f in os.listdir(self.target_neg_dir)
+                if f.endswith(VALID_EXTS)
+            ])
+        else:
+            self.target_neg_files = None
+
+        # 数量一致性校验
+        if self.cfg_mode and self.target_neg_files is not None:
+            assert len(self.image_files) == len(self.target_files) == len(self.ref_files) == len(self.target_neg_files), \
+                "The number of input, target, reference, and neg_target images must be consistent."
+        else:
+            assert len(self.image_files) == len(self.target_files) == len(self.ref_files), \
+                "The number of input, target, and reference images must be consistent."
 
         self.image_size = (height, width)
         self.image_size_small = (128, 128)  # 仅 IR 超分任务使用
@@ -166,15 +191,33 @@ class PairedDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
 
         input_path = self.image_files[idx]
-        target_path = self.target_files[idx]
         ref_path = self.ref_files[idx]
 
         filename = os.path.basename(input_path)
+
+        # ============================================================
+        # 【CFG】正负样本随机选择
+        #   只有当 cfg_mode=True 且 JSON 中提供了 target_neg 时才生效
+        # ============================================================
+        if self.cfg_mode and self.target_neg_files is not None:
+            if random.random() < self.cfg_pos_ratio:
+                target_path = self.target_files[idx]
+                current_prompt = self.prompt
+                is_positive = True
+            else:
+                target_path = self.target_neg_files[idx]
+                current_prompt = self.prompt_neg
+                is_positive = False
+        else:
+            target_path = self.target_files[idx]
+            current_prompt = self.prompt
+            is_positive = True
+
         extra_prompt = self.extra_prompts.get(filename, "")
         if extra_prompt != "":
-            final_prompt = f"{self.prompt}, {extra_prompt}"     # prompts combination
+            final_prompt = f"{current_prompt}, {extra_prompt}"     # prompts combination
         else:
-            final_prompt = self.prompt
+            final_prompt = current_prompt
 
         # if self.ref_dir2 is not None and target_path in self.target_files2:
         #     pseudo=True
@@ -263,6 +306,7 @@ class PairedDataset(torch.utils.data.Dataset):
             "conditioning_pixel_values": input_tensor,
             "caption": final_prompt,
             "filename": filename,
+            "is_positive": is_positive,
         }
 
         if self.tokenizer is not None:
