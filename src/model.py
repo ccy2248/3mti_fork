@@ -192,7 +192,7 @@ def save_ckpt(net_difix, optimizer, outf):
 
 
 class Difix(torch.nn.Module):
-    def __init__(self, pretrained_name=None, pretrained_path=None, ckpt_folder="checkpoints", lora_rank_vae=4, mv_unet=False, timestep=999):
+    def __init__(self, pretrained_name=None, pretrained_path=None, ckpt_folder="checkpoints", lora_rank_vae=4, mv_unet=False, timestep=999, no_skip=False):
         super().__init__()
         self.tokenizer = AutoTokenizer.from_pretrained("/data/home/scxk346/run/workspace/3mti/models/sd-turbo/", subfolder="tokenizer")
         self.text_encoder = CLIPTextModel.from_pretrained("/data/home/scxk346/run/workspace/3mti/models/sd-turbo/", subfolder="text_encoder").cuda()
@@ -206,7 +206,8 @@ class Difix(torch.nn.Module):
         vae.decoder.skip_conv_2 = torch.nn.Conv2d(256, 512, kernel_size=(1, 1), stride=(1, 1), bias=False).cuda()
         vae.decoder.skip_conv_3 = torch.nn.Conv2d(128, 512, kernel_size=(1, 1), stride=(1, 1), bias=False).cuda()
         vae.decoder.skip_conv_4 = torch.nn.Conv2d(128, 256, kernel_size=(1, 1), stride=(1, 1), bias=False).cuda()
-        vae.decoder.ignore_skip = False
+        vae.decoder.ignore_skip = no_skip
+        self.no_skip = no_skip
         
         if mv_unet:
             from mv_unet import UNet2DConditionModel
@@ -317,11 +318,15 @@ class Difix(torch.nn.Module):
 
         for n, _p in self.vae.named_parameters():
             if "lora" in n:
-                _p.requires_grad = True
-        self.vae.decoder.skip_conv_1.requires_grad_(True)
-        self.vae.decoder.skip_conv_2.requires_grad_(True)
-        self.vae.decoder.skip_conv_3.requires_grad_(True)
-        self.vae.decoder.skip_conv_4.requires_grad_(True)
+                if self.no_skip and "skip_conv" in n:
+                    _p.requires_grad = False   # skip_conv LoRA 不参与 forward
+                else:
+                    _p.requires_grad = True
+        if not self.no_skip:
+            self.vae.decoder.skip_conv_1.requires_grad_(True)
+            self.vae.decoder.skip_conv_2.requires_grad_(True)
+            self.vae.decoder.skip_conv_3.requires_grad_(True)
+            self.vae.decoder.skip_conv_4.requires_grad_(True)
 
     def forward(self, x, timesteps=None, prompt=None, prompt_tokens=None):
         # either the prompt or the prompt_tokens should be provided

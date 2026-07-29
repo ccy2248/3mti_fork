@@ -55,6 +55,7 @@ def main(args):
         lora_rank_vae=args.lora_rank_vae, 
         timestep=args.timestep,
         mv_unet=args.mv_unet,
+        no_skip=args.no_skip,
     )
     net_difix.set_train()
 
@@ -82,14 +83,15 @@ def main(args):
     layers_to_opt = []
     layers_to_opt += list(net_difix.unet.parameters())
    
-    for n, _p in net_difix.vae.named_parameters():
-        if "lora" in n and "vae_skip" in n:
-            assert _p.requires_grad
-            layers_to_opt.append(_p)
-    layers_to_opt = layers_to_opt + list(net_difix.vae.decoder.skip_conv_1.parameters()) + \
-        list(net_difix.vae.decoder.skip_conv_2.parameters()) + \
-        list(net_difix.vae.decoder.skip_conv_3.parameters()) + \
-        list(net_difix.vae.decoder.skip_conv_4.parameters())
+    if not args.no_skip:
+        for n, _p in net_difix.vae.named_parameters():
+            if "lora" in n and "vae_skip" in n:
+                assert _p.requires_grad
+                layers_to_opt.append(_p)
+        layers_to_opt = layers_to_opt + list(net_difix.vae.decoder.skip_conv_1.parameters()) + \
+            list(net_difix.vae.decoder.skip_conv_2.parameters()) + \
+            list(net_difix.vae.decoder.skip_conv_3.parameters()) + \
+            list(net_difix.vae.decoder.skip_conv_4.parameters())
 
     optimizer = torch.optim.AdamW(layers_to_opt, lr=args.learning_rate,
         betas=(args.adam_beta1, args.adam_beta2), weight_decay=args.adam_weight_decay,
@@ -373,6 +375,8 @@ if __name__ == "__main__":
     parser.add_argument("--lora_rank_vae", default=4, type=int)
     parser.add_argument("--timestep", default=199, type=int)
     parser.add_argument("--mv_unet", action="store_true")
+    parser.add_argument("--no_skip", action="store_true",
+        help="Disable VAE decoder skip connections (ablation: w/o optical skip).")
 
     # training details
     parser.add_argument("--output_dir", required=True)

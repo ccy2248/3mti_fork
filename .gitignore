@@ -28,3 +28,5 @@ __pycache__/
 
 # IDE
 .vscode/
+unet/unet/tiny_data/*.npz
+unet/unet/experiments/
